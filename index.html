@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>STS-Vision</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: palco de vídeo em tela cheia; faixa de estado no topo e placar de cronometragem na base,
+   como um painel de prova de atletismo. Tema escuro único (projeção em sala). */
+:root {
+  --bg: #0d1214;
+  --painel: rgba(13, 18, 20, 0.82);
+  --linha: rgba(198, 222, 220, 0.16);
+  --fg: #ecf2f1;
+  --suave: #93a6a8;
+  --pronto: #3fcfb0;
+  --correndo: #f5b83d;
+  --alerta: #ef7a62;
+  --fonte-placar: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --fonte-texto: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--fonte-texto);
+  font-size: 15px; overflow: hidden; -webkit-user-select: none; user-select: none;
+}
+button, select { font: inherit; color: inherit; }
+button:focus-visible, select:focus-visible, label:focus-within { outline: 2px solid var(--pronto); outline-offset: 2px; }
+
+/* ---------- palco ---------- */
+#palco { position: fixed; inset: 0; display: grid; place-items: center; background: #000; }
+#video, #tela { position: absolute; max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; }
+#video.espelhado, #tela.espelhado { transform: scaleX(-1); }
+
+/* ---------- faixa de estado (topo) ---------- */
+#topo {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 3;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 10px;
+  display: flex; align-items: center; gap: 10px;
+  background: linear-gradient(var(--painel), rgba(13, 18, 20, 0));
+}
+#pilula {
+  font-family: var(--fonte-placar); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  font-size: 15px; padding: 4px 10px; border-radius: 4px; border: 1px solid currentColor; color: var(--suave);
+  flex: none;
+}
+#mensagem { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.botao-icone {
+  flex: none; background: rgba(236, 242, 241, 0.08); border: 1px solid var(--linha);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+}
+
+/* ---------- placar (base) ---------- */
+#placar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 3;
+  padding: 14px 16px calc(env(safe-area-inset-bottom, 0px) + 14px);
+  background: var(--painel); border-top: 1px solid var(--linha);
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; align-items: end;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+#cronometro {
+  font-family: var(--fonte-placar); font-weight: 600; font-size: clamp(64px, 19vw, 132px);
+  line-height: 0.9; font-variant-numeric: tabular-nums; color: var(--suave); letter-spacing: -0.01em;
+}
+#cronometro small { font-size: 0.38em; font-weight: 500; margin-left: 4px; color: var(--suave); }
+#tentativas { display: grid; gap: 4px; min-width: 0; }
+.tentativa {
+  display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+  font-family: var(--fonte-placar); font-size: 22px; font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--linha); padding-bottom: 2px; color: var(--suave);
+}
+.tentativa b { font-weight: 600; color: var(--fg); }
+.tentativa.melhor b { color: var(--pronto); }
+.rotulo { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; font-family: var(--fonte-texto); }
+#rodape { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--suave); }
+
+/* estados */
+body[data-estado="PRONTO"] #pilula { color: var(--pronto); }
+body[data-estado="SUBINDO"] #pilula, body[data-estado="CORRENDO"] #pilula { color: var(--correndo); }
+body[data-estado="CORRENDO"] #cronometro, body[data-estado="SUBINDO"] #cronometro { color: var(--correndo); }
+body[data-estado="FINALIZADO"] #pilula, body[data-estado="FINALIZADO"] #cronometro { color: var(--pronto); }
+body[data-estado="EM_PE"] #cronometro { color: var(--fg); }
+
+/* ---------- tela inicial ---------- */
+#inicio {
+  position: fixed; inset: 0; z-index: 5; overflow-y: auto; background: var(--bg);
+  padding: calc(env(safe-area-inset-top, 0px) + 28px) 20px calc(env(safe-area-inset-bottom, 0px) + 28px);
+  display: flex; flex-direction: column; gap: 22px; max-width: 520px; margin: 0 auto;
+}
+#inicio h1 { font-family: var(--fonte-placar); font-weight: 600; font-size: 44px; margin: 0; letter-spacing: 0.01em; }
+#inicio p { margin: 0; color: var(--suave); line-height: 1.5; }
+.grupo { display: grid; gap: 8px; }
+.grupo > span { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--suave); }
+.opcoes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.opcoes label { position: relative; }
+.opcoes input { position: absolute; opacity: 0; }
+.opcoes label span {
+  display: block; text-align: center; padding: 10px 6px; border: 1px solid var(--linha);
+  border-radius: 8px; cursor: pointer; font-weight: 500;
+}
+.opcoes input:checked + span { border-color: var(--pronto); color: var(--pronto); background: rgba(63, 207, 176, 0.08); }
+.principal {
+  background: var(--pronto); color: #06231d; border: 0; border-radius: 10px;
+  padding: 15px; font-weight: 600; font-size: 17px; cursor: pointer;
+}
+.secundario {
+  background: transparent; border: 1px solid var(--linha); border-radius: 10px; padding: 13px;
+  font-weight: 500; cursor: pointer; text-align: center;
+}
+#arquivo { display: none; }
+#erro { color: var(--alerta); min-height: 1.2em; }
+.passos { margin: 0; padding-left: 20px; color: var(--suave); line-height: 1.6; }
+@media (prefers-reduced-motion: no-preference) { #cronometro { transition: color 0.2s; } }
+</style>
+</head>
+<body data-estado="AGUARDANDO">
+
+<section id="inicio">
+  <div class="grupo">
+    <h1>STS-Vision</h1>
+    <p>Cronometragem automática do teste Supine-to-Stand pela câmera do celular.</p>
+  </div>
+  <ol class="passos">
+    <li>Celular em pé, de lado para a pessoa, a uns 3 m, corpo inteiro na imagem.</li>
+    <li>A pessoa deita e fica parada até aparecer <b>PRONTO</b>.</li>
+    <li>Faz as 3 tentativas, voltando a deitar entre elas.</li>
+  </ol>
+  <div class="grupo">
+    <span>Câmera</span>
+    <div class="opcoes" style="grid-template-columns: 1fr 1fr;">
+      <label><input type="radio" name="camera" id="cam-traseira" value="environment" checked><span>Traseira</span></label>
+      <label><input type="radio" name="camera" id="cam-frontal" value="user"><span>Frontal</span></label>
+    </div>
+  </div>
+  <div class="grupo">
+    <span>Modelo de detecção</span>
+    <div class="opcoes">
+      <label><input type="radio" name="modelo" id="mod-lite" value="lite"><span>Leve</span></label>
+      <label><input type="radio" name="modelo" id="mod-full" value="full" checked><span>Padrão</span></label>
+      <label><input type="radio" name="modelo" id="mod-heavy" value="heavy"><span>Preciso</span></label>
+    </div>
+  </div>
+  <button class="principal" id="btn-camera">Iniciar com a câmera</button>
+  <label class="secundario" for="arquivo">Ensaiar com um vídeo gravado</label>
+  <input type="file" id="arquivo" accept="video/*">
+  <p id="erro" role="alert"></p>
+</section>
+
+<div id="palco" hidden>
+  <video id="video" playsinline muted></video>
+  <canvas id="tela"></canvas>
+</div>
+
+<header id="topo" hidden>
+  <span id="pilula">Aguardando</span>
+  <span id="mensagem">Deite de lado para a câmera</span>
+  <button class="botao-icone" id="btn-reiniciar">Reiniciar</button>
+  <button class="botao-icone" id="btn-sair">Sair</button>
+</header>
+
+<footer id="placar" hidden>
+  <div id="cronometro">0,00<small>s</small></div>
+  <div id="tentativas">
+    <div class="tentativa" id="t1"><span class="rotulo">Tentativa 1</span><b>—</b></div>
+    <div class="tentativa" id="t2"><span class="rotulo">Tentativa 2</span><b>—</b></div>
+    <div class="tentativa" id="t3"><span class="rotulo">Tentativa 3</span><b>—</b></div>
+  </div>
+  <div id="rodape"><span id="info">—</span><button class="botao-icone" id="btn-exportar" hidden>Salvar CSV</button></div>
+</footer>
+
+<script>
+/*
+ * STS-Vision — sts_core.js
+ * Núcleo do cronômetro do Supine-to-Stand em tempo real (porta fiel de
+ * sts_tempo_real.py / v23 para JavaScript, para rodar no navegador).
+ * Uso: const c = new CronometroSTS(largura, altura);
+ *      const st = c.processar(tSegundos, pontos)  // pontos: 33 x [x,y,z,vis] ou null
+ */
+
+const PONTOS_MOVIMENTO = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+const LADO_ESQ = [11, 13, 15, 23, 25, 27];
+const LADO_DIR = [12, 14, 16, 24, 26, 28];
+const OMBRO = { LEFT: 11, RIGHT: 12 };
+const TORNOZELO = { LEFT: 27, RIGHT: 28 };
+
+const CALIB_S = 1.5;
+const CALIB_MAX_OSCILACAO = 0.015;
+const CALIB_MAX_INCLINACAO = 0.35;
+const LIMIAR_LEVANTOU = 0.5;
+const LIMIAR_DEITOU = 0.2;
+const SUAV_VELOCIDADE_S = 0.10;
+const PCT_RUIDO = 50;
+const LIMIAR_MOVIMENTO = 5.0;
+const PARADO_S = 5 / 30;
+const RECUO_MAX_S = 3.0;
+const SUAV_ALTURA_S = 7 / 30;
+const FRACAO_VEL_FIM = 0.2;
+const FRACAO_ALTURA_FIM = 0.8;
+const CONFIRMA_FIM_S = 0.3;
+const MAX_TENTATIVAS = 3;
+
+const AGUARDANDO = "AGUARDANDO", CALIBRANDO = "CALIBRANDO", PRONTO = "PRONTO",
+  SUBINDO = "SUBINDO", EM_PE = "EM_PE", FINALIZADO = "FINALIZADO";
+
+// ---------------- utilidades numéricas (equivalentes ao numpy/scipy) ----------------
+function arredondarPar(x) {                       // round() do Python (meio -> par)
+  const f = Math.floor(x), d = x - f;
+  if (Math.abs(d - 0.5) < 1e-12) return f % 2 === 0 ? f : f + 1;
+  return Math.round(x);
+}
+function quadros(seg, fps, impar = false) {
+  let n = Math.max(1, arredondarPar(seg * fps));
+  return impar && n % 2 === 0 ? n + 1 : n;
+}
+function percentil(valores, p) {                  // np.percentile (linear)
+  const a = Float64Array.from(valores).sort();
+  const r = (p / 100) * (a.length - 1), i = Math.floor(r), f = r - i;
+  return i + 1 < a.length ? a[i] * (1 - f) + a[i + 1] * f : a[i];
+}
+const mediana = (v) => percentil(v, 50);
+function desvio(v) {                              // np.std (ddof = 0)
+  const m = v.reduce((s, x) => s + x, 0) / v.length;
+  return Math.sqrt(v.reduce((s, x) => s + (x - m) ** 2, 0) / v.length);
+}
+function filtroMedia(serie, tam) {                // scipy uniform_filter1d, mode='reflect'
+  const n = serie.length, out = new Float64Array(n);
+  const ini = -Math.floor(tam / 2), fim = ini + tam - 1;
+  const idx = (i) => {
+    while (i < 0 || i >= n) i = i < 0 ? -i - 1 : 2 * n - i - 1;
+    return i;
+  };
+  for (let k = 0; k < n; k++) {
+    let s = 0;
+    for (let j = ini; j <= fim; j++) s += serie[idx(k + j)];
+    out[k] = s / tam;
+  }
+  return out;
+}
+function gradiente(s) {                           // np.gradient
+  const n = s.length, g = new Float64Array(n);
+  if (n < 2) return g;
+  g[0] = s[1] - s[0]; g[n - 1] = s[n - 1] - s[n - 2];
+  for (let k = 1; k < n - 1; k++) g[k] = (s[k + 1] - s[k - 1]) / 2;
+  return g;
+}
+function argmax(a, i0, i1) { let k = i0; for (let i = i0; i < i1; i++) if (a[i] > a[k]) k = i; return k; }
+function argmin(a, i0, i1) { let k = i0; for (let i = i0; i < i1; i++) if (a[i] < a[k]) k = i; return k; }
+
+function detectarInicio(mov, idxCruzou, idxMin, limiar, nParado) {
+  let parados = 0;
+  for (let k = idxCruzou; k >= idxMin; k--) {
+    if (mov[k] < limiar) { if (++parados >= nParado) return k + nParado; }
+    else parados = 0;
+  }
+  return idxMin;
+}
+function detectarFim(s, idxIni, idxCruzou, idxLimite) {
+  const kTopo = argmax(s, idxCruzou, idxLimite);
+  const kBaixo = argmin(s, idxIni, kTopo + 1);
+  const vel = gradiente(s);
+  const kPico = argmax(vel, kBaixo, kTopo + 1);
+  const alvo = s[kBaixo] + FRACAO_ALTURA_FIM * (s[kTopo] - s[kBaixo]);
+  for (let k = kPico; k < idxLimite; k++)
+    if (vel[k] < FRACAO_VEL_FIM * vel[kPico] && s[k] >= alvo) return k;
+  return kTopo;
+}
+
+// ---------------------------------- cronômetro ----------------------------------
+class CronometroSTS {
+  constructor(largura, altura, fpsNominal = 30) {
+    this.escalaX = largura / altura;
+    this.fps = fpsNominal;
+    this.reiniciar();
+  }
+
+  reiniciar() {
+    this.t = []; this.xy = []; this.vel = []; this.vis = [];
+    this.estado = AGUARDANDO; this.lado = null;
+    this.nivelDeitado = null; this.comprimento = null; this.ruidoCalib = null;
+    this.idxRepouso = []; this.tentativas = [];
+    this.idxDeitou = null; this.idxCruzou = null;
+    this.topo = -Infinity; this.idxTopo = null; this.fimAnterior = -1;
+    this.tProvisorio = null; this.parado = 0;
+    this.mensagem = "Deite de lado para a câmera";
+  }
+
+  processar(t, pontos) {
+    let xy, vis;
+    if (!pontos) {
+      if (!this.xy.length) return this.status();
+      xy = this.xy[this.xy.length - 1]; vis = this.vis[this.vis.length - 1];
+    } else {
+      xy = new Float64Array(66); vis = new Float64Array(33);
+      const ant = this.xy[this.xy.length - 1];
+      for (let i = 0; i < 33; i++) {
+        let x = pontos[i][0] * this.escalaX, y = pontos[i][1];
+        if (Number.isNaN(x) && ant) x = ant[2 * i];
+        if (Number.isNaN(y) && ant) y = ant[2 * i + 1];
+        xy[2 * i] = x; xy[2 * i + 1] = y; vis[i] = pontos[i][3] ?? 0;
+      }
+    }
+    const k = this.xy.length;
+    this.t.push(t); this.xy.push(xy); this.vis.push(vis);
+    const ant = k ? this.xy[k - 1] : xy, v = new Float64Array(PONTOS_MOVIMENTO.length);
+    PONTOS_MOVIMENTO.forEach((p, j) => {
+      v[j] = Math.hypot(xy[2 * p] - ant[2 * p], xy[2 * p + 1] - ant[2 * p + 1]);
+    });
+    this.vel.push(v);
+    if (k >= 10) this.fps = 10 / Math.max(this.t[k] - this.t[k - 10], 1e-6);
+
+    if (this.estado === AGUARDANDO || this.estado === CALIBRANDO) this._calibrar(k);
+    else if (this.estado !== FINALIZADO) this._acompanhar(k);
+    return this.status();
+  }
+
+  _calibrar(k) {
+    const n = quadros(CALIB_S, this.fps);
+    if (k + 1 < n) return;
+    const ids = []; for (let i = k + 1 - n; i <= k; i++) ids.push(i);
+    const media = (lista) => lista.reduce((s, x) => s + x, 0) / lista.length;
+    const visE = media(ids.flatMap((i) => LADO_ESQ.map((p) => this.vis[i][p])));
+    const visD = media(ids.flatMap((i) => LADO_DIR.map((p) => this.vis[i][p])));
+    const lado = visE >= visD ? "LEFT" : "RIGHT";
+    const o = OMBRO[lado], a = TORNOZELO[lado];
+    const dist = ids.map((i) => Math.hypot(this.xy[i][2 * o] - this.xy[i][2 * a],
+      this.xy[i][2 * o + 1] - this.xy[i][2 * a + 1]));
+    const incl = mediana(ids.map((i, j) =>
+      Math.abs(this.xy[i][2 * o + 1] - this.xy[i][2 * a + 1]) / (dist[j] + 1e-9)));
+    const osc = Math.max(...[2 * o, 2 * o + 1, 2 * a, 2 * a + 1]
+      .map((c) => desvio(ids.map((i) => this.xy[i][c]))));
+    if (incl > CALIB_MAX_INCLINACAO) {
+      this.estado = AGUARDANDO; this.mensagem = "Aguardando a pessoa deitar"; return;
+    }
+    if (osc > CALIB_MAX_OSCILACAO) {
+      this.estado = CALIBRANDO; this.mensagem = "Deitada — fique parada..."; return;
+    }
+    this.lado = lado;
+    this.nivelDeitado = mediana(ids.map((i) => this.xy[i][2 * o + 1]));
+    this.comprimento = mediana(dist);
+    const tam = quadros(SUAV_VELOCIDADE_S, this.fps);
+    this.ruidoCalib = PONTOS_MOVIMENTO.map((_, j) =>
+      percentil(filtroMedia(ids.map((i) => this.vel[i][j]), tam), PCT_RUIDO) + 1e-9);
+    this.idxRepouso = ids.slice();
+    this.idxDeitou = k + 1;
+    this.estado = PRONTO; this.mensagem = "PRONTO — pode levantar";
+  }
+
+  _altura(k) {
+    return (this.nivelDeitado - this.xy[k][2 * OMBRO[this.lado] + 1]) / this.comprimento;
+  }
+
+  _movimentoProvisorio(k) {
+    const n = quadros(SUAV_VELOCIDADE_S, this.fps), i0 = Math.max(0, k - n + 1);
+    const z = PONTOS_MOVIMENTO.map((_, j) => {
+      let s = 0; for (let i = i0; i <= k; i++) s += this.vel[i][j];
+      return s / (k - i0 + 1) / this.ruidoCalib[j];
+    }).sort((x, y) => x - y);
+    return z[z.length - 2];
+  }
+
+  _acompanhar(k) {
+    const h = this._altura(k);
+    if (this.estado === EM_PE) {
+      if (h < LIMIAR_DEITOU) {
+        this.estado = PRONTO; this.idxDeitou = k; this.tProvisorio = null;
+        this.mensagem = `PRONTO — tentativa ${this.tentativas.length + 1} de ${MAX_TENTATIVAS}`;
+      }
+      return;
+    }
+    if (this.estado === PRONTO) {
+      if (h < LIMIAR_DEITOU) this.idxRepouso.push(k);
+      const nPar = quadros(PARADO_S, this.fps);
+      if (this._movimentoProvisorio(k) > LIMIAR_MOVIMENTO) {
+        if (this.tProvisorio === null) this.tProvisorio = this.t[k];
+        this.parado = 0;
+      } else if (this.tProvisorio !== null) {
+        this.parado += 1;
+        if (this.parado >= nPar && h < LIMIAR_DEITOU) this.tProvisorio = null;
+      }
+      if (h >= LIMIAR_LEVANTOU) {
+        this.estado = SUBINDO; this.idxCruzou = k;
+        this.topo = -Infinity; this.idxTopo = k;
+        if (this.tProvisorio === null) this.tProvisorio = this.t[k];
+        this.mensagem = "Levantando...";
+      }
+      return;
+    }
+    if (this.estado === SUBINDO) {
+      const s = -this.xy[k][2 * OMBRO[this.lado] + 1];
+      if (s > this.topo + 0.002) { this.topo = s; this.idxTopo = k; }
+      const parou = this.t[k] - this.t[this.idxTopo] >= CONFIRMA_FIM_S;
+      if (parou || h < LIMIAR_LEVANTOU) this._registrarTentativa(k);
+    }
+  }
+
+  _registrarTentativa(k) {
+    const fimBuf = k + 1, J = PONTOS_MOVIMENTO.length;
+    const tam = quadros(SUAV_VELOCIDADE_S, this.fps);
+    const colunas = [];
+    for (let j = 0; j < J; j++) {
+      const serie = new Float64Array(fimBuf);
+      for (let i = 0; i < fimBuf; i++) serie[i] = this.vel[i][j];
+      colunas.push(filtroMedia(serie, tam));
+    }
+    const ruido = colunas.map((c) => percentil(this.idxRepouso.map((i) => c[i]), PCT_RUIDO) + 1e-9);
+    const mov = new Float64Array(fimBuf);
+    for (let i = 0; i < fimBuf; i++) {
+      const z = colunas.map((c, j) => c[i] / ruido[j]).sort((x, y) => x - y);
+      mov[i] = z[J - 2];
+    }
+    const t = this.t, alvoT = t[this.idxDeitou] - RECUO_MAX_S;
+    let idxMin = 0; while (idxMin < t.length && t[idxMin] < alvoT) idxMin++;   // searchsorted
+    idxMin = Math.max(idxMin, this.fimAnterior + 1, 0);
+    const qIni = detectarInicio(mov, this.idxCruzou, idxMin, LIMIAR_MOVIMENTO,
+      quadros(PARADO_S, this.fps));
+    const o = 2 * OMBRO[this.lado] + 1, alt = new Float64Array(fimBuf);
+    for (let i = 0; i < fimBuf; i++) alt[i] = -this.xy[i][o];
+    const altura = filtroMedia(alt, quadros(SUAV_ALTURA_S, this.fps, true));
+    const qFim = detectarFim(altura, qIni, this.idxCruzou, fimBuf);
+    this.fimAnterior = qFim;
+    if (qFim > qIni) {
+      this.tentativas.push({
+        numero: this.tentativas.length + 1, t_inicio: t[qIni], t_fim: t[qFim],
+        delta_t: t[qFim] - t[qIni], quadro_inicio: qIni, quadro_fim: qFim,
+        latencia_s: t[k] - t[qFim],
+      });
+    }
+    this.tProvisorio = null;
+    if (this.tentativas.length >= MAX_TENTATIVAS) {
+      this.estado = FINALIZADO; this.mensagem = "FIM DO TESTE";
+    } else {
+      this.estado = EM_PE; this.mensagem = "Registrado — volte a deitar";
+    }
+  }
+
+  encerrar() {
+    if (this.estado === SUBINDO) this._registrarTentativa(this.xy.length - 1);
+    return this.status();
+  }
+
+  status() {
+    const agora = this.t.length ? this.t[this.t.length - 1] : 0;
+    const cron = (this.estado === PRONTO || this.estado === SUBINDO) && this.tProvisorio !== null
+      ? agora - this.tProvisorio : null;
+    const melhor = this.tentativas.length
+      ? Math.min(...this.tentativas.map((x) => x.delta_t)) : null;
+    return { estado: this.estado, mensagem: this.mensagem, cronometro_s: cron,
+      tentativas: this.tentativas.slice(), melhor_s: melhor, lado: this.lado };
+  }
+}
+
+if (typeof module !== "undefined") module.exports = { CronometroSTS };
+
+</script>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODELO = (m) => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${m}/float16/latest/pose_landmarker_${m}.task`;
+const CONEXOES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,31],[28,32]];
+const ROTULO = { AGUARDANDO: "Aguardando", CALIBRANDO: "Calibrando", PRONTO: "Pronto", SUBINDO: "Levantando",
+                 CORRENDO: "Valendo", EM_PE: "Registrado", FINALIZADO: "Fim" };
+
+const $ = (id) => document.getElementById(id);
+const video = $("video"), tela = $("tela"), ctx = tela.getContext("2d");
+let detector = null, cron = null, rodando = false, fonte = null, t0 = 0, ultimoTs = -1;
+let travaTela = null, fpsMedio = 0, ultimoQuadro = 0, origem = "";
+
+const fmt = (s) => s.toFixed(2).replace(".", ",");
+const valor = (nome) => document.querySelector(`input[name="${nome}"]:checked`).value;
+
+async function criarDetector(modelo) {
+  const arquivos = await FilesetResolver.forVisionTasks(WASM);
+  const base = { modelAssetPath: MODELO(modelo) };
+  for (const delegate of ["GPU", "CPU"]) {
+    try {
+      return await PoseLandmarker.createFromOptions(arquivos, {
+        baseOptions: { ...base, delegate }, runningMode: "VIDEO", numPoses: 1,
+      });
+    } catch (e) { if (delegate === "CPU") throw e; }
+  }
+}
+
+async function iniciar(usarArquivo) {
+  $("erro").textContent = "";
+  const btn = $("btn-camera"); btn.disabled = true; btn.textContent = "Carregando modelo…";
+  try {
+    if (!detector || detector._modelo !== valor("modelo")) {
+      detector?.close?.();
+      detector = await criarDetector(valor("modelo"));
+      detector._modelo = valor("modelo");
+    }
+    if (usarArquivo) {
+      fonte = "arquivo";
+      video.srcObject = null;
+      video.src = URL.createObjectURL(usarArquivo);
+      video.loop = false;
+      origem = usarArquivo.name;
+    } else {
+      fonte = "camera";
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: valor("camera"), width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      });
+      video.src = ""; video.srcObject = stream;
+      origem = "camera-" + valor("camera");
+    }
+    await video.play();
+    await new Promise((r) => (video.videoWidth ? r() : video.addEventListener("loadedmetadata", r, { once: true })));
+    tela.width = video.videoWidth; tela.height = video.videoHeight;
+    const espelhar = fonte === "camera" && valor("camera") === "user";
+    video.classList.toggle("espelhado", espelhar); tela.classList.toggle("espelhado", espelhar);
+    cron = new CronometroSTS(video.videoWidth, video.videoHeight);
+    t0 = performance.now(); ultimoTs = -1; fpsMedio = 0;
+    for (const el of ["palco", "topo", "placar"]) $(el).hidden = false;
+    $("inicio").hidden = true;
+    try { travaTela = await navigator.wakeLock?.request("screen"); } catch (e) { travaTela = null; }
+    rodando = true; agendar();
+  } catch (e) {
+    $("erro").textContent = e.name === "NotAllowedError"
+      ? "O acesso à câmera foi negado. Libere em Ajustes > Safari > Câmera e tente de novo."
+      : "Não foi possível iniciar: " + (e.message || e);
+  } finally {
+    btn.disabled = false; btn.textContent = "Iniciar com a câmera";
+  }
+}
+
+function agendar() {
+  if (!rodando) return;
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(quadro);
+  else requestAnimationFrame(quadro);
+}
+
+function quadro() {
+  if (!rodando) return;
+  if (fonte === "arquivo" && video.ended) { finalizarVideo(); return; }
+  const agora = performance.now();
+  const t = fonte === "arquivo" ? video.currentTime : (agora - t0) / 1000;
+  let ts = Math.round(t * 1000); if (ts <= ultimoTs) ts = ultimoTs + 1; ultimoTs = ts;
+  const res = detector.detectForVideo(video, ts);
+  const lm = res.landmarks && res.landmarks[0];
+  const pontos = lm ? lm.map((p) => [p.x, p.y, p.z, p.visibility ?? 0]) : null;
+  const st = cron.processar(t, pontos);
+  desenhar(pontos);
+  mostrar(st);
+  if (ultimoQuadro) {
+    const inst = 1000 / Math.max(agora - ultimoQuadro, 1);
+    fpsMedio = fpsMedio ? 0.9 * fpsMedio + 0.1 * inst : inst;
+  }
+  ultimoQuadro = agora;
+  agendar();
+}
+
+function desenhar(p) {
+  ctx.clearRect(0, 0, tela.width, tela.height);
+  if (!p) return;
+  const w = tela.width, h = tela.height, esp = Math.max(3, w / 220);
+  ctx.lineWidth = esp; ctx.strokeStyle = "rgba(236,242,241,0.9)"; ctx.lineCap = "round";
+  for (const [a, b] of CONEXOES) {
+    if (Math.min(p[a][3], p[b][3]) < 0.3) continue;
+    ctx.beginPath(); ctx.moveTo(p[a][0] * w, p[a][1] * h); ctx.lineTo(p[b][0] * w, p[b][1] * h); ctx.stroke();
+  }
+  ctx.fillStyle = "#f5b83d";
+  for (const i of new Set(CONEXOES.flat())) {
+    if (p[i][3] < 0.3) continue;
+    ctx.beginPath(); ctx.arc(p[i][0] * w, p[i][1] * h, esp * 1.4, 0, 2 * Math.PI); ctx.fill();
+  }
+}
+
+function mostrar(st) {
+  const correndo = st.cronometro_s !== null;
+  const estadoVisual = correndo && st.estado === "PRONTO" ? "CORRENDO" : st.estado;
+  document.body.dataset.estado = estadoVisual;
+  $("pilula").textContent = ROTULO[estadoVisual] || st.estado;
+  $("mensagem").textContent = st.mensagem;
+  let v = 0;
+  if (correndo) v = st.cronometro_s;
+  else if (st.estado === "FINALIZADO") v = st.melhor_s;
+  else if (st.tentativas.length) v = st.tentativas[st.tentativas.length - 1].delta_t;
+  $("cronometro").firstChild.nodeValue = fmt(v);
+  for (let n = 1; n <= 3; n++) {
+    const tt = st.tentativas.find((x) => x.numero === n), el = $("t" + n);
+    el.querySelector("b").textContent = tt ? fmt(tt.delta_t) + " s" : "—";
+    el.classList.toggle("melhor", !!tt && st.melhor_s !== null && tt.delta_t === st.melhor_s && st.tentativas.length > 1);
+  }
+  $("btn-exportar").hidden = st.tentativas.length === 0;
+  $("info").textContent = `${Math.round(fpsMedio)} quadros/s · modelo ${detector._modelo}` +
+    (st.melhor_s !== null ? ` · melhor ${fmt(st.melhor_s)} s` : "");
+}
+
+function finalizarVideo() {
+  mostrar(cron.encerrar());
+  rodando = false;
+  $("mensagem").textContent = "Vídeo terminou — " + cron.status().mensagem;
+}
+
+function parar() {
+  rodando = false;
+  video.pause();
+  video.srcObject?.getTracks().forEach((t) => t.stop());
+  travaTela?.release?.(); travaTela = null;
+  for (const el of ["palco", "topo", "placar"]) $(el).hidden = true;
+  $("inicio").hidden = false;
+}
+
+function exportar() {
+  const st = cron.status(), data = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const linhas = ["origem,tentativa,t_inicio_s,t_fim_s,duracao_s",
+    ...st.tentativas.map((x) => [origem, x.numero, x.t_inicio.toFixed(3), x.t_fim.toFixed(3), x.delta_t.toFixed(3)].join(","))];
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([linhas.join("\n")], { type: "text/csv" }));
+  a.download = `sts_${data}.csv`; a.click();
+}
+
+$("btn-camera").addEventListener("click", () => iniciar(null));
+$("arquivo").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) iniciar(f); e.target.value = ""; });
+$("btn-reiniciar").addEventListener("click", () => {
+  if (!cron) return;
+  cron.reiniciar();
+  if (fonte === "arquivo") { video.currentTime = 0; video.play(); ultimoTs = -1; if (!rodando) { rodando = true; agendar(); } }
+});
+$("btn-sair").addEventListener("click", parar);
+$("btn-exportar").addEventListener("click", exportar);
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState === "visible" && rodando && !travaTela) {
+    try { travaTela = await navigator.wakeLock?.request("screen"); } catch (e) { travaTela = null; }
+  }
+});
+</script>
+</body>
+</html>
