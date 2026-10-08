@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>STS-Vision</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: palco de vídeo em tela cheia; faixa de estado no topo e placar de cronometragem na base,
+   como um painel de prova de atletismo. Tema escuro único (projeção em sala). */
+:root {
+  --bg: #0d1214;
+  --painel: rgba(13, 18, 20, 0.82);
+  --linha: rgba(198, 222, 220, 0.16);
+  --fg: #ecf2f1;
+  --suave: #93a6a8;
+  --pronto: #3fcfb0;
+  --correndo: #f5b83d;
+  --alerta: #ef7a62;
+  --fonte-placar: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --fonte-texto: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--fonte-texto);
+  font-size: 15px; overflow: hidden; -webkit-user-select: none; user-select: none;
+}
+button, select { font: inherit; color: inherit; }
+button:focus-visible, select:focus-visible, label:focus-within { outline: 2px solid var(--pronto); outline-offset: 2px; }
+
+/* ---------- palco ---------- */
+#palco { position: fixed; inset: 0; display: grid; place-items: center; background: #000; }
+#video, #tela { position: absolute; max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; }
+#video.espelhado, #tela.espelhado { transform: scaleX(-1); }
+
+/* ---------- faixa de estado (topo) ---------- */
+#topo {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 3;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 10px;
+  display: flex; align-items: center; gap: 10px;
+  background: linear-gradient(var(--painel), rgba(13, 18, 20, 0));
+}
+#pilula {
+  font-family: var(--fonte-placar); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  font-size: 15px; padding: 4px 10px; border-radius: 4px; border: 1px solid currentColor; color: var(--suave);
+  flex: none;
+}
+#mensagem { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.botao-icone {
+  flex: none; background: rgba(236, 242, 241, 0.08); border: 1px solid var(--linha);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+}
+
+/* ---------- placar (base) ---------- */
+#placar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 3;
+  padding: 14px 16px calc(env(safe-area-inset-bottom, 0px) + 14px);
+  background: var(--painel); border-top: 1px solid var(--linha);
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; align-items: end;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+#cronometro {
+  font-family: var(--fonte-placar); font-weight: 600; font-size: clamp(64px, 19vw, 132px);
+  line-height: 0.9; font-variant-numeric: tabular-nums; color: var(--suave); letter-spacing: -0.01em;
+}
+#cronometro small { font-size: 0.38em; font-weight: 500; margin-left: 4px; color: var(--suave); }
+#tentativas { display: grid; gap: 4px; min-width: 0; }
+.tentativa {
+  display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+  font-family: var(--fonte-placar); font-size: 22px; font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--linha); padding-bottom: 2px; color: var(--suave);
+}
+.tentativa b { font-weight: 600; color: var(--fg); }
+.tentativa.melhor b { color: var(--pronto); }
+.rotulo { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; font-family: var(--fonte-texto); }
+#classe {
+  grid-column: 1 / -1; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0;
+}
+#classe-rotulo {
+  font-family: var(--fonte-placar); font-weight: 600; font-size: 20px; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 2px 10px; border-radius: 4px; border: 1px solid currentColor;
+}
+#classe-detalhe { color: var(--suave); font-size: 13px; }
+#classe[data-faixa="acima"] #classe-rotulo { color: var(--pronto); }
+#classe[data-faixa="esperado"] #classe-rotulo { color: var(--fg); }
+#classe[data-faixa="abaixo"] #classe-rotulo { color: var(--alerta); }
+#rodape { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--suave); }
+
+/* estados */
+body[data-estado="PRONTO"] #pilula { color: var(--pronto); }
+body[data-estado="SUBINDO"] #pilula, body[data-estado="CORRENDO"] #pilula { color: var(--correndo); }
+body[data-estado="CORRENDO"] #cronometro, body[data-estado="SUBINDO"] #cronometro { color: var(--correndo); }
+body[data-estado="FINALIZADO"] #pilula { color: var(--pronto); }
+body[data-estado="FINALIZADO"] #cronometro { color: var(--fg); }
+body[data-estado="EM_PE"] #cronometro { color: var(--fg); }
+
+/* ---------- tela inicial ---------- */
+#inicio {
+  position: fixed; inset: 0; z-index: 5; overflow-y: auto; background: var(--bg);
+  padding: calc(env(safe-area-inset-top, 0px) + 28px) 20px calc(env(safe-area-inset-bottom, 0px) + 28px);
+  display: flex; flex-direction: column; gap: 22px; max-width: 520px; margin: 0 auto;
+}
+#inicio h1 { font-family: var(--fonte-placar); font-weight: 600; font-size: 44px; margin: 0; letter-spacing: 0.01em; }
+#inicio p { margin: 0; color: var(--suave); line-height: 1.5; }
+.grupo { display: grid; gap: 8px; }
+.grupo > span { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--suave); }
+.opcoes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.opcoes label { position: relative; }
+.opcoes input { position: absolute; opacity: 0; }
+.opcoes label span {
+  display: block; text-align: center; padding: 10px 6px; border: 1px solid var(--linha);
+  border-radius: 8px; cursor: pointer; font-weight: 500;
+}
+.opcoes input:checked + span { border-color: var(--pronto); color: var(--pronto); background: rgba(63, 207, 176, 0.08); }
+.campo {
+  width: 100%; padding: 11px 12px; border: 1px solid var(--linha); border-radius: 8px;
+  background: rgba(236, 242, 241, 0.04); font-size: 16px;
+}
+.principal {
+  background: var(--pronto); color: #06231d; border: 0; border-radius: 10px;
+  padding: 15px; font-weight: 600; font-size: 17px; cursor: pointer;
+}
+.secundario {
+  background: transparent; border: 1px solid var(--linha); border-radius: 10px; padding: 13px;
+  font-weight: 500; cursor: pointer; text-align: center;
+}
+#arquivo { display: none; }
+#erro { color: var(--alerta); min-height: 1.2em; }
+.passos { margin: 0; padding-left: 20px; color: var(--suave); line-height: 1.6; }
+.ocupado { pointer-events: none; opacity: 0.6; }
+button:disabled { opacity: 0.4; cursor: default; }
+#sessao-n { color: var(--fg); }
+#fim {
+  position: fixed; z-index: 4; left: 12px; right: 12px; top: 50%; transform: translateY(-60%);
+  max-width: 420px; margin: 0 auto; padding: 20px; border-radius: 14px;
+  background: var(--painel); border: 1px solid var(--linha);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  display: grid; gap: 10px;
+}
+#fim h2 { font-family: var(--fonte-placar); font-weight: 600; font-size: 30px; margin: 0; }
+#fim p { margin: 0 0 6px; color: var(--suave); line-height: 1.45; }
+@media (prefers-reduced-motion: no-preference) { #cronometro { transition: color 0.2s; } }
+</style>
+</head>
+<body data-estado="AGUARDANDO">
+
+<section id="inicio">
+  <div class="grupo">
+    <h1>STS-Vision</h1>
+    <p>Cronometragem automática do teste Supine-to-Stand pela câmera do celular.</p>
+  </div>
+  <ol class="passos">
+    <li>Celular em pé, de lado para a pessoa, a uns 3 m, corpo inteiro na imagem.</li>
+    <li>A pessoa deita e fica parada até aparecer <b>PRONTO</b>.</li>
+    <li>Faz as 3 tentativas, voltando a deitar entre elas.</li>
+  </ol>
+  <div class="grupo">
+    <span>Avaliado</span>
+    <input class="campo" type="text" id="ident" placeholder="Identificação (opcional)" autocomplete="off">
+    <div class="opcoes" style="grid-template-columns: 1fr 1fr;">
+      <label><input type="radio" name="sexo" id="sexo-f" value="F" checked><span>Feminino</span></label>
+      <label><input type="radio" name="sexo" id="sexo-m" value="M"><span>Masculino</span></label>
+    </div>
+    <select class="campo" id="idade">
+      <option value="14">14 anos</option><option value="15">15 anos</option>
+      <option value="16" selected>16 anos</option><option value="17">17 anos</option>
+      <option value="18">18 anos</option><option value="19">19 anos</option>
+      <option value="">Outra idade (sem classificação)</option>
+    </select>
+  </div>
+  <div class="grupo">
+    <span>Câmera</span>
+    <div class="opcoes" style="grid-template-columns: 1fr 1fr;">
+      <label><input type="radio" name="camera" id="cam-traseira" value="environment" checked><span>Traseira</span></label>
+      <label><input type="radio" name="camera" id="cam-frontal" value="user"><span>Frontal</span></label>
+    </div>
+  </div>
+  <div class="grupo">
+    <span>Modelo de detecção</span>
+    <div class="opcoes">
+      <label><input type="radio" name="modelo" id="mod-lite" value="lite"><span>Leve</span></label>
+      <label><input type="radio" name="modelo" id="mod-full" value="full" checked><span>Padrão</span></label>
+      <label><input type="radio" name="modelo" id="mod-heavy" value="heavy"><span>Preciso</span></label>
+    </div>
+  </div>
+  <button class="principal" id="btn-camera">Iniciar com a câmera</button>
+  <label class="secundario" id="rotulo-arquivo" for="arquivo">Analisar um vídeo da galeria</label>
+  <input type="file" id="arquivo" accept="video/*">
+  <p id="erro" role="alert"></p>
+  <div class="grupo" id="sessao">
+    <span>Sessão</span>
+    <p id="sessao-n">Nenhuma avaliação nesta sessão</p>
+    <div class="opcoes" style="grid-template-columns: 2fr 1fr;">
+      <button class="secundario" id="btn-csv-inicio" disabled>Baixar CSV da sessão</button>
+      <button class="secundario" id="btn-limpar" disabled>Limpar</button>
+    </div>
+  </div>
+</section>
+
+<section id="fim" hidden>
+  <h2 id="fim-titulo">Teste concluído</h2>
+  <p id="fim-texto"></p>
+  <button class="principal" id="btn-proximo">Próximo avaliado</button>
+  <button class="secundario" id="btn-repetir">Repetir este (descarta o resultado)</button>
+  <button class="secundario" id="btn-csv-fim">Baixar CSV da sessão</button>
+</section>
+
+<div id="palco" hidden>
+  <video id="video" playsinline muted></video>
+  <canvas id="tela"></canvas>
+</div>
+
+<header id="topo" hidden>
+  <span id="pilula">Aguardando</span>
+  <span id="mensagem">Deite de lado para a câmera</span>
+  <button class="botao-icone" id="btn-reiniciar">Repetir</button>
+  <button class="botao-icone" id="btn-sair">Sair</button>
+</header>
+
+<footer id="placar" hidden>
+  <div id="cronometro">0,00<small>s</small></div>
+  <div id="tentativas">
+    <div class="tentativa" id="t1"><span class="rotulo">Tentativa 1</span><b>—</b></div>
+    <div class="tentativa" id="t2"><span class="rotulo">Tentativa 2</span><b>—</b></div>
+    <div class="tentativa" id="t3"><span class="rotulo">Tentativa 3</span><b>—</b></div>
+  </div>
+  <div id="classe" hidden><span id="classe-rotulo"></span><span id="classe-detalhe"></span></div>
+  <div id="rodape"><span id="info">—</span></div>
+</footer>
+
+<script>
+
+/*
+ * STS-Vision — sts_core.js
+ * Núcleo do cronômetro do Supine-to-Stand em tempo real — algoritmo v25
+ * (v23 + v24: fim pela média dos 2 ombros, limiar 15%, início 1 quadro antes;
+ *  v25: "parado" relativo ao repouso local, sem recuo cego, início nunca antes
+ *  de deitar; app: só registra a tentativa depois que a pessoa ficou EM PÉ).
+ * Uso: const c = new CronometroSTS(largura, altura);
+ *      const st = c.processar(tSegundos, pontos)  // pontos: 33 x [x,y,z,vis] ou null
+ */
+
+const PONTOS_MOVIMENTO = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+const LADO_ESQ = [11, 13, 15, 23, 25, 27];
+const LADO_DIR = [12, 14, 16, 24, 26, 28];
+const OMBRO = { LEFT: 11, RIGHT: 12 };
+const TORNOZELO = { LEFT: 27, RIGHT: 28 };
+
+const CALIB_S = 1.5;
+const CALIB_MAX_OSCILACAO = 0.015;
+const CALIB_MAX_INCLINACAO = 0.35;
+const LIMIAR_LEVANTOU = 0.5;
+const LIMIAR_DEITOU = 0.2;
+const SUAV_VELOCIDADE_S = 0.10;
+const PCT_RUIDO = 50;
+const LIMIAR_MOVIMENTO = 5.0;
+const PARADO_S = 5 / 30;
+const RECUO_MAX_S = 3.0;
+const SUAV_ALTURA_S = 7 / 30;
+const FRACAO_VEL_FIM = 0.15;          // v24
+const FRACAO_ALTURA_FIM = 0.8;
+const CONFIRMA_FIM_S = 0.3;
+const MAX_TENTATIVAS = 3;
+const AJUSTE_INICIO_QUADROS = 1;      // v24: início 1 quadro antes do detectado
+const PCT_REPOUSO_LOCAL = 10;         // v25: repouso local = percentil 10 do movimento
+const FATOR_REPOUSO_LOCAL = 2.0;      // v25: parado = abaixo de max(limiar, 2 x repouso local)
+const H_EM_PE = 0.75;                 // app: só fecha a tentativa depois de passar daqui (em pé >= 0,89)
+const SUBINDO_MAX_S = 6.0;            // app: fecha mesmo assim depois de 6 s (nunca trava)
+const VERSAO_ALGORITMO = "v25";
+
+const AGUARDANDO = "AGUARDANDO", CALIBRANDO = "CALIBRANDO", PRONTO = "PRONTO",
+  SUBINDO = "SUBINDO", EM_PE = "EM_PE", FINALIZADO = "FINALIZADO";
+
+// ---------------- utilidades numéricas (equivalentes ao numpy/scipy) ----------------
+function arredondarPar(x) {                       // round() do Python (meio -> par)
+  const f = Math.floor(x), d = x - f;
+  if (Math.abs(d - 0.5) < 1e-12) return f % 2 === 0 ? f : f + 1;
+  return Math.round(x);
+}
+function quadros(seg, fps, impar = false) {
+  let n = Math.max(1, arredondarPar(seg * fps));
+  return impar && n % 2 === 0 ? n + 1 : n;
+}
+function percentil(valores, p) {                  // np.percentile (linear)
+  const a = Float64Array.from(valores).sort();
+  const r = (p / 100) * (a.length - 1), i = Math.floor(r), f = r - i;
+  return i + 1 < a.length ? a[i] * (1 - f) + a[i + 1] * f : a[i];
+}
+const mediana = (v) => percentil(v, 50);
+function desvio(v) {                              // np.std (ddof = 0)
+  const m = v.reduce((s, x) => s + x, 0) / v.length;
+  return Math.sqrt(v.reduce((s, x) => s + (x - m) ** 2, 0) / v.length);
+}
+function filtroMedia(serie, tam) {                // scipy uniform_filter1d, mode='reflect'
+  const n = serie.length, out = new Float64Array(n);
+  const ini = -Math.floor(tam / 2), fim = ini + tam - 1;
+  const idx = (i) => {
+    while (i < 0 || i >= n) i = i < 0 ? -i - 1 : 2 * n - i - 1;
+    return i;
+  };
+  for (let k = 0; k < n; k++) {
+    let s = 0;
+    for (let j = ini; j <= fim; j++) s += serie[idx(k + j)];
+    out[k] = s / tam;
+  }
+  return out;
+}
+function gradiente(s) {                           // np.gradient
+  const n = s.length, g = new Float64Array(n);
+  if (n < 2) return g;
+  g[0] = s[1] - s[0]; g[n - 1] = s[n - 1] - s[n - 2];
+  for (let k = 1; k < n - 1; k++) g[k] = (s[k + 1] - s[k - 1]) / 2;
+  return g;
+}
+function argmax(a, i0, i1) { let k = i0; for (let i = i0; i < i1; i++) if (a[i] > a[k]) k = i; return k; }
+function argmin(a, i0, i1) { let k = i0; for (let i = i0; i < i1; i++) if (a[i] < a[k]) k = i; return k; }
+
+function detectarInicio(mov, idxCruzou, idxMin, limiarBase, nParado) {
+  // v25: o limiar se adapta ao repouso LOCAL; sem trecho parado -> momento mais quieto
+  const trecho = Array.from(mov.slice(idxMin, idxCruzou + 1));
+  const limiar = Math.max(limiarBase, FATOR_REPOUSO_LOCAL * percentil(trecho, PCT_REPOUSO_LOCAL));
+  let parados = 0;
+  for (let k = idxCruzou; k >= idxMin; k--) {
+    if (mov[k] < limiar) { if (++parados >= nParado) return k + nParado; }
+    else parados = 0;
+  }
+  const suave = filtroMedia(trecho, nParado);
+  return idxMin + argmin(suave, 0, suave.length);
+}
+function detectarFim(s, idxIni, idxCruzou, idxLimite) {
+  const kTopo = argmax(s, idxCruzou, idxLimite);
+  const kBaixo = argmin(s, idxIni, kTopo + 1);
+  const vel = gradiente(s);
+  const kPico = argmax(vel, kBaixo, kTopo + 1);
+  const alvo = s[kBaixo] + FRACAO_ALTURA_FIM * (s[kTopo] - s[kBaixo]);
+  for (let k = kPico; k < idxLimite; k++)
+    if (vel[k] < FRACAO_VEL_FIM * vel[kPico] && s[k] >= alvo) return k;
+  return kTopo;
+}
+
+// ---------------------------------- cronômetro ----------------------------------
+class CronometroSTS {
+  constructor(largura, altura, fpsNominal = 30) {
+    this.escalaX = largura / altura;
+    this.fps = fpsNominal;
+    this.reiniciar();
+  }
+
+  reiniciar() {
+    this.t = []; this.xy = []; this.vel = []; this.vis = [];
+    this.estado = AGUARDANDO; this.lado = null;
+    this.nivelDeitado = null; this.comprimento = null; this.ruidoCalib = null;
+    this.idxRepouso = []; this.tentativas = [];
+    this.idxDeitou = null; this.idxCruzou = null;
+    this.topo = -Infinity; this.idxTopo = null; this.fimAnterior = -1; this.chegouEmPe = false;
+    this.tProvisorio = null; this.parado = 0;
+    this.mensagem = "Deite de lado para a câmera";
+  }
+
+  processar(t, pontos) {
+    let xy, vis;
+    if (!pontos) {
+      if (!this.xy.length) return this.status();
+      xy = this.xy[this.xy.length - 1]; vis = this.vis[this.vis.length - 1];
+    } else {
+      xy = new Float64Array(66); vis = new Float64Array(33);
+      const ant = this.xy[this.xy.length - 1];
+      for (let i = 0; i < 33; i++) {
+        let x = pontos[i][0] * this.escalaX, y = pontos[i][1];
+        if (Number.isNaN(x) && ant) x = ant[2 * i];
+        if (Number.isNaN(y) && ant) y = ant[2 * i + 1];
+        xy[2 * i] = x; xy[2 * i + 1] = y; vis[i] = pontos[i][3] ?? 0;
+      }
+    }
+    const k = this.xy.length;
+    this.t.push(t); this.xy.push(xy); this.vis.push(vis);
+    const ant = k ? this.xy[k - 1] : xy, v = new Float64Array(PONTOS_MOVIMENTO.length);
+    PONTOS_MOVIMENTO.forEach((p, j) => {
+      v[j] = Math.hypot(xy[2 * p] - ant[2 * p], xy[2 * p + 1] - ant[2 * p + 1]);
+    });
+    this.vel.push(v);
+    if (k >= 10) this.fps = 10 / Math.max(this.t[k] - this.t[k - 10], 1e-6);
+
+    if (this.estado === AGUARDANDO || this.estado === CALIBRANDO) this._calibrar(k);
+    else if (this.estado !== FINALIZADO) this._acompanhar(k);
+    return this.status();
+  }
+
+  _calibrar(k) {
+    const n = quadros(CALIB_S, this.fps);
+    if (k + 1 < n) return;
+    const ids = []; for (let i = k + 1 - n; i <= k; i++) ids.push(i);
+    const media = (lista) => lista.reduce((s, x) => s + x, 0) / lista.length;
+    const visE = media(ids.flatMap((i) => LADO_ESQ.map((p) => this.vis[i][p])));
+    const visD = media(ids.flatMap((i) => LADO_DIR.map((p) => this.vis[i][p])));
+    const lado = visE >= visD ? "LEFT" : "RIGHT";
+    const o = OMBRO[lado], a = TORNOZELO[lado];
+    const dist = ids.map((i) => Math.hypot(this.xy[i][2 * o] - this.xy[i][2 * a],
+      this.xy[i][2 * o + 1] - this.xy[i][2 * a + 1]));
+    const incl = mediana(ids.map((i, j) =>
+      Math.abs(this.xy[i][2 * o + 1] - this.xy[i][2 * a + 1]) / (dist[j] + 1e-9)));
+    const osc = Math.max(...[2 * o, 2 * o + 1, 2 * a, 2 * a + 1]
+      .map((c) => desvio(ids.map((i) => this.xy[i][c]))));
+    if (incl > CALIB_MAX_INCLINACAO) {
+      this.estado = AGUARDANDO; this.mensagem = "Aguardando a pessoa deitar"; return;
+    }
+    if (osc > CALIB_MAX_OSCILACAO) {
+      this.estado = CALIBRANDO; this.mensagem = "Deitada — fique parada..."; return;
+    }
+    this.lado = lado;
+    this.nivelDeitado = mediana(ids.map((i) => this.xy[i][2 * o + 1]));
+    this.comprimento = mediana(dist);
+    const tam = quadros(SUAV_VELOCIDADE_S, this.fps);
+    this.ruidoCalib = PONTOS_MOVIMENTO.map((_, j) =>
+      percentil(filtroMedia(ids.map((i) => this.vel[i][j]), tam), PCT_RUIDO) + 1e-9);
+    this.idxRepouso = ids.slice();
+    this.idxDeitou = k + 1;
+    this.estado = PRONTO; this.mensagem = "PRONTO — pode levantar";
+  }
+
+  _altura(k) {
+    return (this.nivelDeitado - this.xy[k][2 * OMBRO[this.lado] + 1]) / this.comprimento;
+  }
+
+  _movimentoProvisorio(k) {
+    const n = quadros(SUAV_VELOCIDADE_S, this.fps), i0 = Math.max(0, k - n + 1);
+    const z = PONTOS_MOVIMENTO.map((_, j) => {
+      let s = 0; for (let i = i0; i <= k; i++) s += this.vel[i][j];
+      return s / (k - i0 + 1) / this.ruidoCalib[j];
+    }).sort((x, y) => x - y);
+    return z[z.length - 2];
+  }
+
+  _acompanhar(k) {
+    const h = this._altura(k);
+    if (this.estado === EM_PE) {
+      if (h < LIMIAR_DEITOU) {
+        this.estado = PRONTO; this.idxDeitou = k; this.tProvisorio = null;
+        this.mensagem = `PRONTO — tentativa ${this.tentativas.length + 1} de ${MAX_TENTATIVAS}`;
+      }
+      return;
+    }
+    if (this.estado === PRONTO) {
+      if (h < LIMIAR_DEITOU) this.idxRepouso.push(k);
+      const nPar = quadros(PARADO_S, this.fps);
+      if (this._movimentoProvisorio(k) > LIMIAR_MOVIMENTO) {
+        if (this.tProvisorio === null) this.tProvisorio = this.t[k];
+        this.parado = 0;
+      } else if (this.tProvisorio !== null) {
+        this.parado += 1;
+        if (this.parado >= nPar && h < LIMIAR_DEITOU) this.tProvisorio = null;
+      }
+      if (h >= LIMIAR_LEVANTOU) {
+        this.estado = SUBINDO; this.idxCruzou = k;
+        this.topo = -Infinity; this.idxTopo = k; this.chegouEmPe = false;
+        if (this.tProvisorio === null) this.tProvisorio = this.t[k];
+        this.mensagem = "Levantando...";
+      }
+      return;
+    }
+    if (this.estado === SUBINDO) {
+      const s = -(this.xy[k][23] + this.xy[k][25]) / 2;          // média dos 2 ombros (y)
+      if (s > this.topo + 0.002) { this.topo = s; this.idxTopo = k; }
+      if (h >= H_EM_PE) this.chegouEmPe = true;
+      const parou = this.t[k] - this.t[this.idxTopo] >= CONFIRMA_FIM_S;
+      const demorou = this.t[k] - this.t[this.idxCruzou] >= SUBINDO_MAX_S;
+      // app: uma pausa no meio da subida (ajoelhado/agachado) não fecha mais a tentativa
+      if ((this.chegouEmPe && parou) || demorou || h < LIMIAR_DEITOU) this._registrarTentativa(k);
+    }
+  }
+
+  _registrarTentativa(k) {
+    const fimBuf = k + 1, J = PONTOS_MOVIMENTO.length;
+    const tam = quadros(SUAV_VELOCIDADE_S, this.fps);
+    const colunas = [];
+    for (let j = 0; j < J; j++) {
+      const serie = new Float64Array(fimBuf);
+      for (let i = 0; i < fimBuf; i++) serie[i] = this.vel[i][j];
+      colunas.push(filtroMedia(serie, tam));
+    }
+    const ruido = colunas.map((c) => percentil(this.idxRepouso.map((i) => c[i]), PCT_RUIDO) + 1e-9);
+    const mov = new Float64Array(fimBuf);
+    for (let i = 0; i < fimBuf; i++) {
+      const z = colunas.map((c, j) => c[i] / ruido[j]).sort((x, y) => x - y);
+      mov[i] = z[J - 2];
+    }
+    const t = this.t, alvoT = t[this.idxDeitou] - RECUO_MAX_S;
+    let idxMin = 0; while (idxMin < t.length && t[idxMin] < alvoT) idxMin++;   // searchsorted
+    if (this.tentativas.length > 0 || this.fimAnterior >= 0) idxMin = this.idxDeitou;   // v25
+    idxMin = Math.max(idxMin, this.fimAnterior + 1, 0);
+    const qDet = detectarInicio(mov, this.idxCruzou, idxMin, LIMIAR_MOVIMENTO,
+      quadros(PARADO_S, this.fps));
+    const alt = new Float64Array(fimBuf);
+    for (let i = 0; i < fimBuf; i++) alt[i] = -(this.xy[i][23] + this.xy[i][25]) / 2;   // v24
+    const altura = filtroMedia(alt, quadros(SUAV_ALTURA_S, this.fps, true));
+    const qFim = detectarFim(altura, qDet, this.idxCruzou, fimBuf);
+    const qIni = Math.max(qDet - AJUSTE_INICIO_QUADROS, 0);                          // v24
+    this.fimAnterior = qFim;
+    if (qFim > qIni) {
+      this.tentativas.push({
+        numero: this.tentativas.length + 1, t_inicio: t[qIni], t_fim: t[qFim],
+        delta_t: t[qFim] - t[qIni], quadro_inicio: qIni, quadro_fim: qFim,
+        latencia_s: t[k] - t[qFim],
+      });
+    }
+    this.tProvisorio = null;
+    if (this.tentativas.length >= MAX_TENTATIVAS) {
+      this.estado = FINALIZADO; this.mensagem = "FIM DO TESTE";
+    } else {
+      this.estado = EM_PE; this.mensagem = "Registrado — volte a deitar";
+    }
+  }
+
+  encerrar() {
+    if (this.estado === SUBINDO) this._registrarTentativa(this.xy.length - 1);
+    return this.status();
+  }
+
+  status() {
+    const agora = this.t.length ? this.t[this.t.length - 1] : 0;
+    const cron = (this.estado === PRONTO || this.estado === SUBINDO) && this.tProvisorio !== null
+      ? agora - this.tProvisorio : null;
+    const melhor = this.tentativas.length
+      ? Math.min(...this.tentativas.map((x) => x.delta_t)) : null;
+    return { estado: this.estado, mensagem: this.mensagem, cronometro_s: cron,
+      tentativas: this.tentativas.slice(), melhor_s: melhor, lado: this.lado,
+      versao: VERSAO_ALGORITMO };
+  }
+}
+
+if (typeof module !== "undefined") module.exports = { CronometroSTS, VERSAO_ALGORITMO };
+
+
+</script>
+<script>
+/*
+ * STS-Vision — normas_sts.js
+ * Curvas de referência do STS para adolescentes de 14 a 19 anos
+ * Fonte: Artigo 1 v2 (Martins-Guimarães & Barros), Tabela 7 — parâmetros
+ * L (ν), M (μ), S (σ) dos modelos BCCG/GAMLSS finais, n = 3.436, tempos
+ * CORRIGIDOS pelo viés de cada avaliador (escala do consenso da equipe).
+ * z = [(X/M)^L − 1] / (L·S); percentil = Φ(z) × 100.
+ * Percentil ALTO = tempo MAIOR = desempenho PIOR.
+ * Conferência: menino, 16 anos, 2,20 s → z ≈ 0,95, P83.
+ * Classificação (3 faixas, escolha do app): < P25 acima do esperado;
+ * P25–P75 esperado; > P75 abaixo do esperado.
+ * RAZAO_CONSENSO: razão do algoritmo (7º avaliador) em relação ao consenso dos
+ * 6 avaliadores do Artigo 1. Ainda não estimada → 1,0. Quando estimada, o tempo
+ * é dividido por ela antes da classificação (mesma correção do Artigo 1).
+ */
+const RAZAO_CONSENSO = 1.0;
+const NORMAS_LMS = {
+  F: { 14: [-0.733, 2.214, 0.160], 15: [-0.733, 2.227, 0.173], 16: [-0.733, 2.241, 0.187],
+       17: [-0.733, 2.254, 0.202], 18: [-0.733, 2.268, 0.219], 19: [-0.733, 2.281, 0.236] },
+  M: { 14: [-0.687, 1.820, 0.183], 15: [-0.687, 1.817, 0.188], 16: [-0.687, 1.807, 0.194],
+       17: [-0.687, 1.812, 0.199], 18: [-0.687, 1.848, 0.204], 19: [-0.687, 1.919, 0.210] },
+};
+const IDADES_CAUTELA = [14, 19];
+const FAIXAS_STS = [
+  { ate: 25, chave: "acima", rotulo: "Acima do esperado" },
+  { ate: 75, chave: "esperado", rotulo: "Esperado para a idade" },
+  { ate: 101, chave: "abaixo", rotulo: "Abaixo do esperado" },
+];
+
+function cdfNormal(z) {                       // Abramowitz & Stegun 7.1.26 (erro < 1,5e-7)
+  const x = Math.abs(z) / Math.SQRT2, t = 1 / (1 + 0.3275911 * x);
+  const erf = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
+    - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return z >= 0 ? 0.5 * (1 + erf) : 0.5 * (1 - erf);
+}
+
+function classificarSTS(tempo, sexo, idade) {
+  const p = NORMAS_LMS[sexo] && NORMAS_LMS[sexo][idade];
+  if (!p || !(tempo > 0)) return null;
+  const [L, M, S] = p;
+  const x = tempo / RAZAO_CONSENSO;
+  const z = (Math.pow(x / M, L) - 1) / (L * S);
+  const percentil = cdfNormal(z) * 100;
+  const faixa = FAIXAS_STS.find((f) => percentil < f.ate);
+  return { z, percentil, chave: faixa.chave, rotulo: faixa.rotulo,
+           cautela: IDADES_CAUTELA.includes(idade) && percentil > 75 };
+}
+
+if (typeof module !== "undefined") module.exports = { classificarSTS, NORMAS_LMS, RAZAO_CONSENSO };
+
+</script>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODELO = (m) => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${m}/float16/latest/pose_landmarker_${m}.task`;
+const CONEXOES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,31],[28,32]];
+const ROTULO = { AGUARDANDO: "Aguardando", CALIBRANDO: "Calibrando", PRONTO: "Pronto", SUBINDO: "Levantando",
+                 CORRENDO: "Valendo", EM_PE: "Registrado", FINALIZADO: "Fim", ANALISANDO: "Analisando" };
+const FPS_ARQUIVO = 30;                 // vídeos da galeria: analisa quadro a quadro a 30 quadros/s
+const CHAVE_SESSAO = "sts_sessao_v1";   // avaliações guardadas neste aparelho
+
+const $ = (id) => document.getElementById(id);
+const video = $("video"), tela = $("tela"), ctx = tela.getContext("2d");
+let detector = null, cron = null, fonte = null, origem = "", urlArquivo = null;
+let geracao = 0;            // cada análise tem um número; laços antigos param sozinhos
+let tsDetector = 0;         // relógio do MediaPipe: só cresce, mesmo entre vídeos
+let travaTela = null, fpsMedio = 0, ultimoQuadro = 0, t0 = 0;
+let perfil = { id: "", sexo: "F", idade: null };
+let avaliacaoAtual = null;  // índice da avaliação atual dentro da sessão (depois de salva)
+let quadrosVistos = 0, quadrosPulados = 0;   // vídeo da galeria: quantos quadros foram analisados
+
+const fmt = (s) => s.toFixed(2).replace(".", ",");
+const valor = (nome) => document.querySelector(`input[name="${nome}"]:checked`).value;
+
+// ------------------------------- sessão (vários avaliados) -------------------------------
+function lerSessao() {
+  try { return JSON.parse(localStorage.getItem(CHAVE_SESSAO)) || []; } catch (e) { return []; }
+}
+let sessao = lerSessao();
+function gravarSessao() {
+  try { localStorage.setItem(CHAVE_SESSAO, JSON.stringify(sessao)); } catch (e) { /* só em memória */ }
+  atualizarResumoSessao();
+}
+function atualizarResumoSessao() {
+  const n = sessao.length;
+  $("sessao-n").textContent = n === 0 ? "Nenhuma avaliação nesta sessão"
+    : `${n} ${n > 1 ? "avaliações" : "avaliação"} nesta sessão`;
+  $("btn-csv-inicio").disabled = n === 0;
+  $("btn-limpar").disabled = n === 0;
+  $("btn-csv-fim").textContent = `Baixar CSV da sessão (${n})`;
+}
+
+function salvarAvaliacao() {
+  const st = cron.status();
+  if (!st.tentativas.length) return;
+  const c = st.melhor_s !== null ? classificarSTS(st.melhor_s, perfil.sexo, perfil.idade) : null;
+  const registro = {
+    data_hora: new Date().toISOString(), ...perfil, origem, versao: st.versao,
+    completo: st.tentativas.length >= 3, tentativas: st.tentativas.map((x) => ({
+      numero: x.numero, t_inicio: x.t_inicio, t_fim: x.t_fim, delta_t: x.delta_t })),
+    quadros_analisados_pct: fonte === "arquivo" && quadrosVistos
+      ? +((100 * quadrosVistos) / (quadrosVistos + quadrosPulados)).toFixed(1) : null,
+    melhor_s: st.melhor_s, percentil: c ? c.percentil : null, z: c ? c.z : null,
+    classificacao: c ? c.rotulo : "", cautela: !!(c && c.cautela),
+  };
+  if (avaliacaoAtual === null) { sessao.push(registro); avaliacaoAtual = sessao.length - 1; }
+  else sessao[avaliacaoAtual] = registro;
+  gravarSessao();
+}
+
+function csvSessao() {
+  const cab = "avaliacao,data_hora,identificacao,sexo,idade,origem,versao_algoritmo,completo,tentativa," +
+    "t_inicio_s,t_fim_s,duracao_s,melhor,percentil,z,classificacao,cautela,razao_consenso,quadros_analisados_pct";
+  const linhas = [cab];
+  sessao.forEach((a, i) => a.tentativas.forEach((x) => {
+    const melhor = x.delta_t === a.melhor_s;
+    const campos = [i + 1, a.data_hora, a.id, a.sexo, a.idade ?? "", a.origem, a.versao,
+      a.completo ? "sim" : "nao", x.numero, x.t_inicio.toFixed(3), x.t_fim.toFixed(3), x.delta_t.toFixed(3),
+      melhor ? "sim" : "", melhor && a.percentil !== null ? a.percentil.toFixed(1) : "",
+      melhor && a.z !== null ? a.z.toFixed(3) : "", melhor ? a.classificacao : "",
+      melhor && a.cautela ? "sim" : "", RAZAO_CONSENSO.toFixed(3), a.quadros_analisados_pct ?? ""];
+    linhas.push(campos.map((v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v).join(","));
+  }));
+  return linhas.join("\n");
+}
+
+async function baixarCSV() {
+  if (!sessao.length) return;
+  const nome = `sts_sessao_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.csv`;
+  const arquivo = new File(["﻿" + csvSessao()], nome, { type: "text/csv" });
+  try {                                   // iPhone: abre o menu de compartilhar (Salvar em Arquivos)
+    if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
+      await navigator.share({ files: [arquivo], title: "STS-Vision" }); return;
+    }
+  } catch (e) { if (e.name === "AbortError") return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(arquivo); a.download = nome; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+// ------------------------------------ detecção ------------------------------------
+async function criarDetector(modelo) {
+  const arquivos = await FilesetResolver.forVisionTasks(WASM);
+  const base = { modelAssetPath: MODELO(modelo) };
+  for (const delegate of ["GPU", "CPU"]) {
+    try {
+      return await PoseLandmarker.createFromOptions(arquivos, {
+        baseOptions: { ...base, delegate }, runningMode: "VIDEO", numPoses: 1,
+      });
+    } catch (e) { if (delegate === "CPU") throw e; }
+  }
+}
+
+async function garantirDetector() {
+  if (detector && detector._modelo === valor("modelo")) return;
+  detector?.close?.();
+  detector = await criarDetector(valor("modelo"));
+  detector._modelo = valor("modelo");
+}
+
+// Vídeos grandes (4K do iPhone) são reduzidos antes da detecção: os pontos saem
+// normalizados (0–1), então o resultado é o mesmo e a análise fica bem mais leve.
+const LADO_MAX_DETECCAO = 960;
+const reduzido = document.createElement("canvas"), ctxReduzido = reduzido.getContext("2d");
+function quadroParaDetectar() {
+  const w = video.videoWidth, h = video.videoHeight, escala = LADO_MAX_DETECCAO / Math.max(w, h);
+  if (escala >= 1) return video;
+  reduzido.width = Math.round(w * escala); reduzido.height = Math.round(h * escala);
+  ctxReduzido.drawImage(video, 0, 0, reduzido.width, reduzido.height);
+  return reduzido;
+}
+
+function detectar(t) {
+  tsDetector = Math.max(tsDetector + 1, Math.round(performance.now()));   // sempre crescente
+  try {
+    const res = detector.detectForVideo(quadroParaDetectar(), tsDetector);
+    const lm = res.landmarks && res.landmarks[0];
+    return lm ? lm.map((p) => [p.x, p.y, p.z, p.visibility ?? 0]) : null;
+  } catch (e) {
+    console.warn("quadro ignorado:", e);
+    return null;
+  }
+}
+
+function esperarEvento(alvo, evento, ms = 15000) {
+  return new Promise((ok, falha) => {
+    const tempo = setTimeout(() => falha(new Error(`o vídeo não respondeu (${evento})`)), ms);
+    alvo.addEventListener(evento, () => { clearTimeout(tempo); ok(); }, { once: true });
+  });
+}
+
+// --------------------------------- iniciar análise ---------------------------------
+async function iniciar(arquivo) {
+  $("erro").textContent = "";
+  const botoes = [$("btn-camera"), $("rotulo-arquivo")];
+  botoes.forEach((b) => b.classList.add("ocupado"));
+  $("btn-camera").textContent = "Carregando modelo…";
+  pararMidia();
+  const minhaGeracao = ++geracao;
+  try {
+    await garantirDetector();
+    perfil = { id: $("ident").value.trim(), sexo: valor("sexo"),
+               idade: $("idade").value ? Number($("idade").value) : null };
+    avaliacaoAtual = null;
+    if (arquivo) {
+      fonte = "arquivo"; origem = arquivo.name;
+      $("btn-camera").textContent = "Abrindo vídeo…";
+      urlArquivo = URL.createObjectURL(arquivo);
+      video.srcObject = null; video.preload = "auto"; video.src = urlArquivo; video.load();
+      if (video.readyState < 1) await esperarEvento(video, "loadedmetadata");
+      try { await video.play(); video.pause(); } catch (e) { /* iPhone: só destrava o vídeo */ }
+      if (video.readyState < 2) await esperarEvento(video, "loadeddata");
+    } else {
+      fonte = "camera"; origem = "camera-" + valor("camera");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: valor("camera"), width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      });
+      video.removeAttribute("src"); video.srcObject = stream;
+      await video.play();
+      if (!video.videoWidth) await esperarEvento(video, "loadedmetadata");
+    }
+    if (minhaGeracao !== geracao) return;
+    tela.width = video.videoWidth; tela.height = video.videoHeight;
+    const espelhar = fonte === "camera" && valor("camera") === "user";
+    video.classList.toggle("espelhado", espelhar); tela.classList.toggle("espelhado", espelhar);
+    cron = new CronometroSTS(video.videoWidth, video.videoHeight);
+    fpsMedio = 0; ultimoQuadro = 0; t0 = performance.now();
+    mostrarPalco(true);
+    try { travaTela = await navigator.wakeLock?.request("screen"); } catch (e) { travaTela = null; }
+    if (fonte === "arquivo") analisarArquivo(minhaGeracao);
+    else lacoCamera(minhaGeracao);
+  } catch (e) {
+    $("erro").textContent = e.name === "NotAllowedError"
+      ? "O acesso à câmera foi negado. Libere em Ajustes > Safari > Câmera e tente de novo."
+      : "Não foi possível iniciar: " + (e.message || e);
+    pararMidia(); mostrarPalco(false);
+  } finally {
+    botoes.forEach((b) => b.classList.remove("ocupado"));
+    $("btn-camera").textContent = "Iniciar com a câmera";
+  }
+}
+
+// Vídeo da galeria: toca devagar e analisa cada quadro exibido. A velocidade se ajusta
+// sozinha ao celular: se quadros começam a ser pulados, o vídeo desacelera.
+async function analisarArquivo(g) {
+  if (!video.requestVideoFrameCallback) { analisarArquivoBuscando(g); return; }
+  let taxa = 0.4, tAnterior = -1, intervalo = 1 / FPS_ARQUIVO, seguidos = 0;
+  quadrosVistos = 0; quadrosPulados = 0;
+  video.currentTime = 0; video.playbackRate = taxa; video.loop = false;
+  const passo = (agora, meta) => {
+    if (g !== geracao) return;
+    const tq = meta.mediaTime;
+    if (tq > tAnterior) {
+      if (tAnterior >= 0) {
+        const d = tq - tAnterior;
+        if (d > 0 && d < intervalo * 0.9) intervalo = d;             // fps real do vídeo
+        const perdidos = Math.round(d / intervalo) - 1;
+        if (perdidos > 0) {                        // pulou quadro: desacelera
+          quadrosPulados += perdidos; seguidos = 0;
+          taxa = Math.max(0.1, taxa * 0.8); video.playbackRate = taxa;
+        } else if (++seguidos >= 150 && taxa < 1) {
+          taxa = Math.min(1, taxa * 1.15); video.playbackRate = taxa; seguidos = 0;
+        }
+      }
+      tAnterior = tq; quadrosVistos++;
+      const pontos = detectar(tq);
+      const st = cron.processar(tq, pontos);
+      desenhar(pontos);
+      mostrar(st, `Analisando ${Math.round((100 * tq) / video.duration)}%`);
+      if (st.estado === "FINALIZADO") { concluir(); return; }
+    }
+    if (video.ended) { concluir(); return; }
+    video.requestVideoFrameCallback(passo);
+  };
+  video.addEventListener("ended", () => { if (g === geracao) concluir(); }, { once: true });
+  video.requestVideoFrameCallback(passo);
+  try { await video.play(); } catch (e) { console.warn("play falhou, usando busca:", e); analisarArquivoBuscando(g); }
+}
+
+// Plano B (navegador sem requestVideoFrameCallback): busca quadro a quadro, mais lento.
+async function analisarArquivoBuscando(g) {
+  video.pause();
+  const duracao = video.duration, passo = 1 / FPS_ARQUIVO;
+  let tAnterior = -1;
+  for (let t = passo / 2; t < duracao && g === geracao; t += passo) {
+    video.currentTime = t;
+    try { await esperarEvento(video, "seeked", 5000); } catch (e) { continue; }
+    if (g !== geracao) return;
+    const tq = video.currentTime;
+    if (tq <= tAnterior) continue;
+    tAnterior = tq; quadrosVistos++;
+    const pontos = detectar(tq);
+    const st = cron.processar(tq, pontos);
+    desenhar(pontos);
+    mostrar(st, `Analisando ${Math.round((100 * t) / duracao)}%`);
+    if (st.estado === "FINALIZADO") break;
+  }
+  if (g === geracao) concluir();
+}
+
+function lacoCamera(g) {
+  const passo = () => {
+    if (g !== geracao) return;
+    const agora = performance.now();
+    const pontos = detectar((agora - t0) / 1000);
+    const st = cron.processar((agora - t0) / 1000, pontos);
+    desenhar(pontos);
+    if (ultimoQuadro) {
+      const inst = 1000 / Math.max(agora - ultimoQuadro, 1);
+      fpsMedio = fpsMedio ? 0.9 * fpsMedio + 0.1 * inst : inst;
+    }
+    ultimoQuadro = agora;
+    mostrar(st);
+    if (st.estado === "FINALIZADO") { concluir(); return; }
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(passo);
+    else requestAnimationFrame(passo);
+  };
+  passo();
+}
+
+// --------------------------------- fim de uma avaliação ---------------------------------
+function concluir() {
+  geracao++;                                   // para qualquer laço desta análise
+  const st = cron.encerrar();
+  mostrar(st);
+  salvarAvaliacao();
+  if (fonte === "camera") video.pause();
+  const n = st.tentativas.length;
+  $("fim-titulo").textContent = n >= 3 ? "Teste concluído" : `Teste incompleto (${n} de 3 tentativas)`;
+  $("fim-texto").textContent = n
+    ? `Melhor tempo ${fmt(st.melhor_s)} s — salvo na sessão como avaliação ${avaliacaoAtual + 1}.`
+    : "Nenhuma tentativa detectada; nada foi salvo.";
+  if (fonte === "arquivo" && quadrosVistos) {
+    const pct = (100 * quadrosVistos) / (quadrosVistos + quadrosPulados);
+    $("fim-texto").textContent += ` Quadros analisados: ${pct.toFixed(0)}%.`;
+  }
+  $("fim").hidden = false;
+}
+
+function pararMidia() {
+  geracao++;
+  video.pause();
+  video.srcObject?.getTracks().forEach((t) => t.stop());
+  video.srcObject = null;
+  video.removeAttribute("src"); video.load();
+  if (urlArquivo) { URL.revokeObjectURL(urlArquivo); urlArquivo = null; }
+  travaTela?.release?.(); travaTela = null;
+}
+
+function mostrarPalco(sim) {
+  for (const el of ["palco", "topo", "placar"]) $(el).hidden = !sim;
+  $("inicio").hidden = sim;
+  $("fim").hidden = true;
+}
+
+function proximoAvaliado() {
+  pararMidia(); mostrarPalco(false);
+  $("ident").value = ""; cron = null; avaliacaoAtual = null;
+  $("ident").focus();
+}
+
+function repetir() {
+  if (avaliacaoAtual !== null) { sessao.splice(avaliacaoAtual, 1); gravarSessao(); }
+  avaliacaoAtual = null;
+  const arquivoAtual = fonte === "arquivo" ? $("arquivo").files[0] : null;
+  if (fonte === "arquivo" && !arquivoAtual) { proximoAvaliado(); return; }
+  iniciar(arquivoAtual);
+}
+
+function sair() {
+  if (cron && cron.status().tentativas.length && $("fim").hidden) salvarAvaliacao();
+  proximoAvaliado();
+}
+
+// ------------------------------------ tela ------------------------------------
+function desenhar(p) {
+  ctx.clearRect(0, 0, tela.width, tela.height);
+  if (!p) return;
+  const w = tela.width, h = tela.height, esp = Math.max(3, w / 220);
+  ctx.lineWidth = esp; ctx.strokeStyle = "rgba(236,242,241,0.9)"; ctx.lineCap = "round";
+  for (const [a, b] of CONEXOES) {
+    if (Math.min(p[a][3], p[b][3]) < 0.3) continue;
+    ctx.beginPath(); ctx.moveTo(p[a][0] * w, p[a][1] * h); ctx.lineTo(p[b][0] * w, p[b][1] * h); ctx.stroke();
+  }
+  ctx.fillStyle = "#f5b83d";
+  for (const i of new Set(CONEXOES.flat())) {
+    if (p[i][3] < 0.3) continue;
+    ctx.beginPath(); ctx.arc(p[i][0] * w, p[i][1] * h, esp * 1.4, 0, 2 * Math.PI); ctx.fill();
+  }
+}
+
+function mostrar(st, progresso = "") {
+  const correndo = st.cronometro_s !== null;
+  const estadoVisual = correndo && st.estado === "PRONTO" ? "CORRENDO" : st.estado;
+  document.body.dataset.estado = estadoVisual;
+  $("pilula").textContent = ROTULO[estadoVisual] || st.estado;
+  $("mensagem").textContent = progresso ? `${progresso} · ${st.mensagem}` : st.mensagem;
+  let v = 0;
+  if (correndo) v = st.cronometro_s;
+  else if (st.estado === "FINALIZADO") v = st.melhor_s;
+  else if (st.tentativas.length) v = st.tentativas[st.tentativas.length - 1].delta_t;
+  $("cronometro").firstChild.nodeValue = fmt(v ?? 0);
+  for (let n = 1; n <= 3; n++) {
+    const tt = st.tentativas.find((x) => x.numero === n), el = $("t" + n);
+    el.querySelector("b").textContent = tt ? fmt(tt.delta_t) + " s" : "—";
+    el.classList.toggle("melhor", !!tt && st.melhor_s !== null && tt.delta_t === st.melhor_s && st.tentativas.length > 1);
+  }
+  const c = st.melhor_s !== null ? classificarSTS(st.melhor_s, perfil.sexo, perfil.idade) : null;
+  const caixa = $("classe");
+  if (st.melhor_s === null) caixa.hidden = true;
+  else if (!c) {
+    caixa.hidden = false; caixa.dataset.faixa = "";
+    $("classe-rotulo").textContent = "Sem classificação";
+    $("classe-detalhe").textContent = "curvas de referência: 14 a 19 anos";
+  } else {
+    caixa.hidden = false; caixa.dataset.faixa = c.chave;
+    $("classe-rotulo").textContent = c.rotulo;
+    const p = Math.round(c.percentil);
+    $("classe-detalhe").textContent =
+      `P${p} · mais lento que ${p}% ${perfil.sexo === "F" ? "das meninas" : "dos meninos"} de ${perfil.idade} anos` +
+      (c.cautela ? " · interpretar com cautela nesta idade" : "");
+  }
+  const velocidade = fonte === "camera" ? `${Math.round(fpsMedio)} quadros/s · ` : "vídeo da galeria · ";
+  $("info").textContent = `${velocidade}modelo ${detector._modelo} · algoritmo ${st.versao}` +
+    (perfil.id ? ` · ${perfil.id}` : "");
+}
+
+// ------------------------------------ eventos ------------------------------------
+$("btn-camera").addEventListener("click", () => iniciar(null));
+$("arquivo").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) iniciar(f); });
+$("arquivo").addEventListener("click", (e) => { e.target.value = ""; });   // permite escolher o mesmo vídeo de novo
+$("btn-reiniciar").addEventListener("click", repetir);
+$("btn-sair").addEventListener("click", sair);
+$("btn-proximo").addEventListener("click", proximoAvaliado);
+$("btn-repetir").addEventListener("click", repetir);
+$("btn-csv-fim").addEventListener("click", baixarCSV);
+$("btn-csv-inicio").addEventListener("click", baixarCSV);
+$("btn-limpar").addEventListener("click", () => {
+  if (confirm(`Apagar as ${sessao.length} avaliações desta sessão? Baixe o CSV antes, se ainda não baixou.`)) {
+    sessao = []; gravarSessao();
+  }
+});
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState === "visible" && !$("palco").hidden && !travaTela) {
+    try { travaTela = await navigator.wakeLock?.request("screen"); } catch (e) { travaTela = null; }
+  }
+});
+atualizarResumoSessao();
+</script>
+</body>
+</html>
